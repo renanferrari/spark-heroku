@@ -1,0 +1,17 @@
+apply plugin: 'java'
+apply plugin: 'application'
+
+repositories {
+  jcenter()
+}
+
+mainClassName = "Application"
+
+dependencies {
+  compile 'com.sparkjava:spark-core:2.3'
+  testCompile 'junit:junit:4.11'
+}
+
+task stage {
+  dependsOn installDist
+}
