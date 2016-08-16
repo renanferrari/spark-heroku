@@ -1,5 +1,8 @@
 # spark-heroku
-Sample app for Spark Java framework and Gradle on Heroku.
+Sample app for [Spark Java framework](https://sparkjava.com) and [Gradle](https://gradle.org) on [Heroku](https://heroku.com).
+
+
+## Usage
 
 Test locally:
 
