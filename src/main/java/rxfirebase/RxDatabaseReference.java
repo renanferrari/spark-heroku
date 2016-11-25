@@ -7,11 +7,13 @@ import com.google.firebase.database.MutableData;
 import com.google.firebase.database.OnDisconnect;
 import com.google.firebase.database.Transaction;
 import com.google.firebase.tasks.Task;
-import io.reactivex.Completable;
-import io.reactivex.Single;
 import java.util.Map;
-import java.util.function.Consumer;
-import java.util.function.Function;
+import rx.Emitter;
+import rx.Observable;
+import rx.functions.Action1;
+import rx.functions.Func0;
+import rx.functions.Func1;
+import rxfirebase.results.TaskResult;
 import rxfirebase.results.TransactionResult;
 
 public class RxDatabaseReference extends RxQuery {
@@ -30,41 +32,50 @@ public class RxDatabaseReference extends RxQuery {
     return new RxDatabaseReference(databaseReference.push());
   }
 
-  public <T> Completable set(final T value) {
-    return RxFirebaseTask.observeVoidTask(() -> databaseReference.setValue(value));
+  public <T> Observable<TaskResult<T>> set(final T value) {
+    return observeTask(() -> databaseReference.setValue(value), value);
   }
 
-  public <T> Completable set(final Function<RxDatabaseReference, T> valueFactory) {
-    return set(valueFactory.apply(this));
+  public <T> Observable<TaskResult<T>> set(final Func1<RxDatabaseReference, T> valueFactory) {
+    return set(valueFactory.call(this));
   }
 
-  public <T> Completable set(final Function<RxDatabaseReference, T> valueFactory,
-      final Function<T, Object> valueMapper) {
-    return set(rxRef -> valueMapper.apply(valueFactory.apply(this)));
+  public <T> Observable<TaskResult<T>> set(final Func1<RxDatabaseReference, T> valueFactory,
+      final Func1<T, Object> valueMapper) {
+    final T value = valueFactory.call(this);
+    final Object firebaseValue = valueMapper.call(value);
+    return set(rxRef -> firebaseValue).map(firebaseValueResult -> {
+      if (firebaseValueResult.isSuccessful()) {
+        return TaskResult.create(value);
+      } else {
+        return TaskResult.create(firebaseValueResult.error());
+      }
+    });
   }
 
-  public Completable remove() {
-    return RxFirebaseTask.observeVoidTask(databaseReference::removeValue);
+  public Observable<TaskResult<Void>> remove() {
+    return observeTask(databaseReference::removeValue);
   }
 
-  public Completable updateChildren(final Map<String, Object> updates) {
-    return RxFirebaseTask.observeVoidTask(() -> databaseReference.updateChildren(updates));
+  public Observable<TaskResult<Map<String, Object>>> updateChildren(
+      final Map<String, Object> updates) {
+    return observeTask(() -> databaseReference.updateChildren(updates), updates);
   }
 
-  public Single<TransactionResult> runTransaction(final Consumer<MutableData> onTransaction) {
+  public Observable<TransactionResult> runTransaction(final Action1<MutableData> onTransaction) {
     return runTransaction(mutableData -> {
-      onTransaction.accept(mutableData);
+      onTransaction.call(mutableData);
       return true;
     });
   }
 
-  public Single<TransactionResult> runTransaction(
-      final Function<MutableData, Boolean> onTransaction) {
-    return Single.create(emitter -> {
+  public Observable<TransactionResult> runTransaction(
+      final Func1<MutableData, Boolean> onTransaction) {
+    return Observable.fromEmitter(emitter -> {
       final Transaction.Handler handler = new Transaction.Handler() {
         @Override public Transaction.Result doTransaction(MutableData mutableData) {
           try {
-            if (onTransaction.apply(mutableData)) {
+            if (onTransaction.call(mutableData)) {
               return Transaction.success(mutableData);
             } else {
               return Transaction.abort();
@@ -76,17 +87,49 @@ public class RxDatabaseReference extends RxQuery {
 
         @Override public void onComplete(DatabaseError databaseError, boolean committed,
             DataSnapshot dataSnapshot) {
-          emitter.onSuccess(new TransactionResult(dataSnapshot, databaseError, committed));
+          if (databaseError == null || committed) {
+            emitter.onNext(TransactionResult.create(dataSnapshot, committed));
+            emitter.onCompleted();
+          } else {
+            emitter.onNext(TransactionResult.create(databaseError, committed));
+            emitter.onCompleted();
+          }
         }
       };
 
       databaseReference.runTransaction(handler);
-    });
+    }, Emitter.BackpressureMode.BUFFER);
   }
 
-  public Completable onDisconnect(
-      final Function<OnDisconnect, Task<Void>> onDisconnectTaskFactory) {
-    return RxFirebaseTask.observeVoidTask(
-        () -> onDisconnectTaskFactory.apply(databaseReference.onDisconnect()));
+  public Observable<TaskResult<Void>> onDisconnect(
+      final Func1<OnDisconnect, Task<Void>> onDisconnectTaskFactory) {
+    return observeTask(() -> onDisconnectTaskFactory.call(databaseReference.onDisconnect()));
+  }
+
+  private static <T> Observable<TaskResult<T>> observeTask(final Func0<Task<?>> taskFactory,
+      final T returnValue) {
+    return Observable.fromEmitter(
+        emitter -> taskFactory.call().addOnCompleteListener(completedTask -> {
+          if (completedTask.isSuccessful()) {
+            emitter.onNext(TaskResult.create(returnValue));
+            emitter.onCompleted();
+          } else {
+            emitter.onNext(TaskResult.create(completedTask.getException()));
+            emitter.onCompleted();
+          }
+        }), Emitter.BackpressureMode.BUFFER);
+  }
+
+  private static <T> Observable<TaskResult<T>> observeTask(final Func0<Task<T>> taskFactory) {
+    return Observable.fromEmitter(
+        emitter -> taskFactory.call().addOnCompleteListener(completedTask -> {
+          if (completedTask.isSuccessful()) {
+            emitter.onNext(TaskResult.create(completedTask.getResult()));
+            emitter.onCompleted();
+          } else {
+            emitter.onNext(TaskResult.create(completedTask.getException()));
+            emitter.onCompleted();
+          }
+        }), Emitter.BackpressureMode.BUFFER);
   }
 }

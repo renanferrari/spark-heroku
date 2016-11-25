@@ -6,12 +6,9 @@ import com.google.firebase.database.DatabaseError;
 import com.google.firebase.database.DatabaseReference;
 import com.google.firebase.database.Query;
 import com.google.firebase.database.ValueEventListener;
-import io.reactivex.BackpressureStrategy;
-import io.reactivex.Flowable;
-import io.reactivex.Maybe;
-import io.reactivex.Single;
-import io.reactivex.functions.Predicate;
-import java.util.function.Function;
+import rx.Emitter;
+import rx.Observable;
+import rx.functions.Func1;
 import rxfirebase.results.FirebaseEvent;
 
 public class RxQuery {
@@ -29,58 +26,67 @@ public class RxQuery {
     return query.getRef();
   }
 
-  public Single<DataSnapshot> get() {
-    return Single.create(emitter -> {
+  public Observable<FirebaseEvent> get() {
+    return Observable.fromEmitter(emitter -> {
       final ValueEventListener listener = new ValueEventListener() {
         @Override public void onDataChange(final DataSnapshot dataSnapshot) {
-          emitter.onSuccess(dataSnapshot);
+          emitter.onNext(FirebaseEvent.create(dataSnapshot));
+          emitter.onCompleted();
         }
 
         @Override public void onCancelled(final DatabaseError databaseError) {
-          emitter.onError(databaseError.toException());
+          emitter.onNext(FirebaseEvent.create(databaseError));
+          emitter.onCompleted();
         }
       };
 
       query.addListenerForSingleValueEvent(listener);
 
-      emitter.setCancellable(() -> query.removeEventListener(listener));
-    });
+      emitter.setCancellation(() -> query.removeEventListener(listener));
+    }, Emitter.BackpressureMode.BUFFER);
   }
 
-  public <T> Maybe<T> get(final Function<DataSnapshot, T> snapshotMapper) {
-    return get().flatMapMaybe(dataSnapshot -> {
-      if (dataSnapshot.exists()) {
-        return Maybe.fromCallable(() -> snapshotMapper.apply(dataSnapshot));
-      } else {
-        return Maybe.empty();
-      }
-    });
+  public <T> Observable<T> get(final Func1<DataSnapshot, T> snapshotMapper) {
+    return get().filter(FirebaseEvent::isSuccessful)
+        .map(FirebaseEvent::dataSnapshot)
+        .filter(DataSnapshot::exists)
+        .flatMap(dataSnapshot -> {
+          try {
+            return Observable.fromCallable(() -> snapshotMapper.call(dataSnapshot));
+          } catch (Exception e) {
+            return Observable.error(e);
+          }
+        })
+        .onErrorResumeNext(error -> {
+          error.printStackTrace();
+          return Observable.empty(); // Ignoring error
+        });
   }
 
-  public <T> Maybe<T> get(final Class<T> valueType) {
+  public <T> Observable<T> get(final Class<T> valueType) {
     return get(dataSnapshot -> dataSnapshot.getValue(valueType));
   }
 
-  public Flowable<DataSnapshot> onValueEvent() {
-    return Flowable.create(emitter -> {
+  public Observable<FirebaseEvent> onValueEvent() {
+    return Observable.fromEmitter(emitter -> {
       final ValueEventListener listener = new ValueEventListener() {
         @Override public void onDataChange(final DataSnapshot dataSnapshot) {
-          emitter.onNext(dataSnapshot);
+          emitter.onNext(FirebaseEvent.create(dataSnapshot));
         }
 
         @Override public void onCancelled(final DatabaseError databaseError) {
-          emitter.onError(databaseError.toException());
+          emitter.onNext(FirebaseEvent.create(databaseError));
         }
       };
 
       query.addValueEventListener(listener);
 
-      emitter.setCancellable(() -> query.removeEventListener(listener));
-    }, BackpressureStrategy.BUFFER);
+      emitter.setCancellation(() -> query.removeEventListener(listener));
+    }, Emitter.BackpressureMode.BUFFER);
   }
 
-  public Flowable<FirebaseEvent> onChildEvent() {
-    return Flowable.create(emitter -> {
+  public Observable<FirebaseEvent> onChildEvent() {
+    return Observable.fromEmitter(emitter -> {
       final ChildEventListener listener = new ChildEventListener() {
         @Override public void onChildAdded(DataSnapshot dataSnapshot, String previousChildName) {
           emitter.onNext(FirebaseEvent.create(FirebaseEvent.Type.CHILD_ADDED, dataSnapshot,
@@ -108,27 +114,27 @@ public class RxQuery {
 
       query.addChildEventListener(listener);
 
-      emitter.setCancellable(() -> query.removeEventListener(listener));
-    }, BackpressureStrategy.BUFFER);
+      emitter.setCancellation(() -> query.removeEventListener(listener));
+    }, Emitter.BackpressureMode.BUFFER);
   }
 
-  public Flowable<FirebaseEvent> onChildAdded() {
+  public Observable<FirebaseEvent> onChildAdded() {
     return onChildEvent().filter(eventFilter(FirebaseEvent.Type.CHILD_ADDED));
   }
 
-  public Flowable<FirebaseEvent> onChildChanged() {
+  public Observable<FirebaseEvent> onChildChanged() {
     return onChildEvent().filter(eventFilter(FirebaseEvent.Type.CHILD_CHANGED));
   }
 
-  public Flowable<FirebaseEvent> onChildRemoved() {
+  public Observable<FirebaseEvent> onChildRemoved() {
     return onChildEvent().filter(eventFilter(FirebaseEvent.Type.CHILD_REMOVED));
   }
 
-  public Flowable<FirebaseEvent> onChildMoved() {
+  public Observable<FirebaseEvent> onChildMoved() {
     return onChildEvent().filter(eventFilter(FirebaseEvent.Type.CHILD_MOVED));
   }
 
-  public static Predicate<FirebaseEvent> eventFilter(final FirebaseEvent.Type type) {
+  public static Func1<FirebaseEvent, Boolean> eventFilter(final FirebaseEvent.Type type) {
     return firebaseEvent -> firebaseEvent.type().equals(type);
   }
 }

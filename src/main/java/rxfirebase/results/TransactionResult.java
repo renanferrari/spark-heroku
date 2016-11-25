@@ -13,6 +13,15 @@ public class TransactionResult extends FirebaseResult {
     this.committed = committed;
   }
 
+  public static TransactionResult create(final DataSnapshot dataSnapshot, final boolean committed) {
+    return new TransactionResult(dataSnapshot, null, committed);
+  }
+
+  public static TransactionResult create(final DatabaseError databaseError,
+      final boolean committed) {
+    return new TransactionResult(null, databaseError, committed);
+  }
+
   public boolean committed() {
     return committed;
   }
