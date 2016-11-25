@@ -46,17 +46,28 @@ public class AESTest {
     assertTrue(MESSAGE.equals(Strings.fromUTF8ByteArray(decrypted)));
   }
 
-  @Test public void testWithInvalidKey() throws InvalidCipherTextException {
-    final GCMBlockCipher gcmBlockCipher = GCMBlockCipherFactory.create();
-    final KeyParameter keyParameter = KeyParameterFactory.create(PASSWORD, SALT);
-    final AEADParameters aeadParameters =
-        AEADParameterFactory.create(keyParameter, NONCE, ASSOCIATED_DATA);
+  @Test(expected = InvalidCipherTextException.class) public void testWithInvalidKey()
+      throws InvalidCipherTextException {
+    try {
+      final GCMBlockCipher gcmBlockCipher = GCMBlockCipherFactory.create();
+      final KeyParameter keyParameter = KeyParameterFactory.create(PASSWORD, SALT);
+      final AEADParameters aeadParameters =
+          AEADParameterFactory.create(keyParameter, NONCE, ASSOCIATED_DATA);
 
-    final byte[] encrypted =
-        Encryptor.encrypt(gcmBlockCipher, aeadParameters, Strings.toUTF8ByteArray(MESSAGE));
-    final byte[] decrypted = Encryptor.decrypt(gcmBlockCipher, aeadParameters, encrypted);
+      final byte[] encrypted =
+          Encryptor.encrypt(gcmBlockCipher, aeadParameters, Strings.toUTF8ByteArray(MESSAGE));
 
-    assertTrue(MESSAGE.equals(Strings.fromUTF8ByteArray(decrypted)));
+      final KeyParameter badKeyParameter = KeyParameterFactory.create("Bad password!", SALT);
+      final AEADParameters aeadParametersWithBadKey =
+          AEADParameterFactory.create(badKeyParameter, new byte[AEADParameterFactory.NONCE_LENGTH],
+              ASSOCIATED_DATA);
+
+      Encryptor.decrypt(gcmBlockCipher, aeadParametersWithBadKey, encrypted);
+      fail();
+    } catch (InvalidCipherTextException ex) {
+      assertTrue(ex.getMessage().contains("mac check in GCM failed"));
+      throw ex;
+    }
   }
 
   @Test(expected = InvalidCipherTextException.class) public void testWithInvalidNonce()
